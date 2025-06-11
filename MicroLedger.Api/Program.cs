@@ -1,13 +1,17 @@
-using Microsoft.EntityFrameworkCore;
 using MicroLedger.Infrastructure;
-using Serilog;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using OpenTelemetry;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using Microsoft.IdentityModel.Tokens;
+using Serilog;
 using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using MicroLedger.Application.Services;
+using MicroLedger.Application.Services.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -94,6 +98,10 @@ builder.Services.AddDbContext<LedgerDbContext>(options =>
 // Register background services
 builder.Services.AddHostedService<InterestService>();
 
+// Add health checks
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<LedgerDbContext>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -114,6 +122,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Map health checks
+app.MapHealthChecks("/healthz");
 
 var summaries = new[]
 {
