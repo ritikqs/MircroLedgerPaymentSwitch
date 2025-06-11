@@ -45,7 +45,7 @@ public class AuthController : ControllerBase
     private string GenerateJwtToken(User user)
     {
         // Use a hardcoded key for simplicity
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("qwertyuiopasdfghjkl"));
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("qwertyuiopasdfghjklzxcvbnm1234567890"));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
         var claims = new[]
