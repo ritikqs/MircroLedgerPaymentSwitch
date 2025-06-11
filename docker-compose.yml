@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8080:80"
+    environment:
+      - ConnectionStrings__LedgerDb=Server=db;Database=Ledger;User=sa;Password=Your_password123;TrustServerCertificate=True
+    depends_on:
+      - db
+      - rabbitmq
+
+  db:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    environment:
+      SA_PASSWORD: "Your_password123"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1433:1433"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672" 

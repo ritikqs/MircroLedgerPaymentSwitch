@@ -1,0 +1,6 @@
+@MicroLedger.Api_HostAddress = http://localhost:5250
+
+GET {{MicroLedger.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
