@@ -1,35 +1,41 @@
-version: '3.8'
-
 services:
   api:
     build:
       context: .
       dockerfile: MicroLedger.Api/Dockerfile
     ports:
-      - "44394:443"
+      - "5000:80"
     environment:
-      - ConnectionStrings__LedgerDb=Server=.;Database=Ledger;TrustServerCertificate=True;MultipleActiveResultSets=true;Integrated Security=True
-    depends_on:
-      db:
-        condition: service_healthy
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__LedgerDb=Server=host.docker.internal;Database=Ledger;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;MultipleActiveResultSets=true;
     healthcheck:
-      test: ["CMD", "curl", "-f", "https://localhost:44394/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  db:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+  sqlServer :
+    image : mcr.microsoft.com/mssql/server:2017-latest
     environment:
-      - ACCEPT_EULA=Y
-      - SA_PASSWORD=YourStrong!Passw0rd
+      - SA_PASSWORD="YourStrong!Passw0rd"
+      - ACCEPT_EULA="Y"
     ports:
       - "1433:1433"
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P YourStrong!Passw0rd -Q 'SELECT 1'"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    restart: always
+
+
+  # db:
+  #   image: mcr.microsoft.com/mssql/server:2022-latest
+  #   environment:
+  #     - ACCEPT_EULA=Y
+  #     - SA_PASSWORD=YourStrong!Passw0rd
+  #   ports:
+  #     - "1433:1433"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P YourStrong!Passw0rd -Q 'SELECT 1'"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
 
   rabbitmq:
     image: rabbitmq:3-management

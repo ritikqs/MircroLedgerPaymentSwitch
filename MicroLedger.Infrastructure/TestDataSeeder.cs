@@ -21,21 +21,24 @@ public static class TestDataSeeder
                 Id = "ACC001",
                 Type = AccountType.Checking,
                 Currency = "USD",
-                OwnerId = "user1"
+                OwnerId = "user1",
+                OwnerName = "John Doe"
             },
             new Account
             {
                 Id = "ACC002",
                 Type = AccountType.Checking,
                 Currency = "USD",
-                OwnerId = "user2"
+                OwnerId = "user2",
+                OwnerName = "Jane Smith"
             },
             new Account
             {
                 Id = "BANK_CAPITAL",
                 Type = AccountType.System,
                 Currency = "USD",
-                OwnerId = "system"
+                OwnerId = "system",
+                OwnerName = "Bank System"
             }
         };
 
