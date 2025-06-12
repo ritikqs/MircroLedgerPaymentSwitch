@@ -92,7 +92,11 @@ public class PaymentController : ControllerBase
         return CreatedAtAction(
             nameof(GetTransaction),
             new { id = transaction.Id },
-            new PaymentResponse(transaction.Id)
+            new PaymentResponse(
+                TransactionId: transaction.Id,
+                Status: "Completed",
+                Timestamp: transaction.TimestampUtc
+            )
         );
     }
     

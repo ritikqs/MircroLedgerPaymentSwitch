@@ -9,6 +9,7 @@ using MicroLedger.Domain;
 using System.Threading.Tasks;
 using System.Linq;
 using Microsoft.EntityFrameworkCore;
+using MicroLedger.Api.Models;
 
 namespace MicroLedger.Api.Controllers;
 
@@ -19,17 +20,26 @@ public class AuthController : ControllerBase
     private readonly LedgerDbContext _db;
     private readonly JwtSettings _jwtSettings;
 
-    public AuthController(LedgerDbContext db, IOptions<JwtSettings> jwtSettings)
+    public AuthController(LedgerDbContext db, JwtSettings jwtSettings)
     {
         _db = db;
-        _jwtSettings = jwtSettings.Value;
+        _jwtSettings = jwtSettings ?? throw new ArgumentNullException(nameof(jwtSettings));
+
+        // Early validation of JWT settings
+        if (string.IsNullOrWhiteSpace(_jwtSettings.Key))
+            throw new ArgumentException("JWT Key is not configured");
+        if (string.IsNullOrWhiteSpace(_jwtSettings.Issuer))
+            throw new ArgumentException("JWT Issuer is not configured");
+        if (string.IsNullOrWhiteSpace(_jwtSettings.Audience))
+            throw new ArgumentException("JWT Audience is not configured");
     }
 
     [HttpPost("login")]
-    public async Task<ActionResult<string>> Login([FromBody] LoginRequest request)
+    public async Task<ActionResult<object>> Login([FromBody] LoginRequest request)
     {
-        // In a real app, you would hash passwords and use a proper user store.
-        // For this POC, we'll use a simple check against seeded users.
+        if (string.IsNullOrWhiteSpace(request?.Username) || string.IsNullOrWhiteSpace(request.Password))
+            return BadRequest("Username and password are required");
+
         var user = await _db.Users
             .FirstOrDefaultAsync(u => u.Username == request.Username && u.Password == request.Password);
 
@@ -38,25 +48,48 @@ public class AuthController : ControllerBase
             return Unauthorized("Invalid username or password");
         }
 
-        var token = GenerateJwtToken(user);
-        return Ok(new { token });
+        try
+        {
+            var token = GenerateJwtToken(user);
+            return Ok(new
+            {
+                token,
+                expiresIn = 3600, // 1 hour in seconds
+                role = user.Role
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Token generation failed: {ex.Message}");
+        }
     }
 
     private string GenerateJwtToken(User user)
     {
-        // Use a hardcoded key for simplicity
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("qwertyuiopasdfghjklzxcvbnm1234567890"));
+        // Validate inputs
+        if (user == null) throw new ArgumentNullException(nameof(user));
+        if (string.IsNullOrWhiteSpace(user.Username)) throw new ArgumentException("Username is required");
+        if (string.IsNullOrWhiteSpace(user.Role)) throw new ArgumentException("User role is required");
+
+        // These checks are redundant since we validate in constructor,
+        // but provide extra safety during token generation
+        if (string.IsNullOrWhiteSpace(_jwtSettings.Key))
+            throw new InvalidOperationException("JWT Key is not configured");
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Key));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
         var claims = new[]
         {
             new Claim(ClaimTypes.Name, user.Username),
-            new Claim(ClaimTypes.Role, user.Role)
+            new Claim(ClaimTypes.Role, user.Role),
+            // Add any additional claims here
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 
         var token = new JwtSecurityToken(
-            issuer: "MicroLedger",
-            audience: "MicroLedgerClients",
+            issuer: _jwtSettings.Issuer,
+            audience: _jwtSettings.Audience,
             claims: claims,
             expires: DateTime.UtcNow.AddHours(1),
             signingCredentials: credentials
@@ -71,10 +104,3 @@ public class LoginRequest
     public string Username { get; set; }
     public string Password { get; set; }
 }
-
-public class JwtSettings
-{
-    public string Key { get; set; }
-    public string Issuer { get; set; }
-    public string Audience { get; set; }
-} 

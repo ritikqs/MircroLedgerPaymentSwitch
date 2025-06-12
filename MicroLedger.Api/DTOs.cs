@@ -8,7 +8,11 @@ public record PaymentRequest(
     string Reference
 );
 
-public record PaymentResponse(string TransactionId);
+public record PaymentResponse(
+    string TransactionId,
+    string Status,
+    DateTime Timestamp
+);
 
 public record AccountBalanceDto(
     string AccountId,

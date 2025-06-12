@@ -1,7 +1,6 @@
 using MicroLedger.Infrastructure;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -10,8 +9,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
 using System.Text;
-using MicroLedger.Application.Services;
-using MicroLedger.Application.Services.Interfaces;
+using MicroLedger.Api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,17 +30,21 @@ builder.Services.AddOpenTelemetry()
             .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("MicroLedger"))
             .AddConsoleExporter());
 
-// Add services to the container.
+// Add services to the container
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+
+// Configure Swagger with JWT support
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo 
-    { 
-        Title = "MicroLedger API", 
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "MicroLedger API",
         Version = "v1",
         Description = "A double-entry ledger microservice API"
     });
+
+    // Add JWT Bearer authentication to Swagger
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
@@ -51,6 +53,7 @@ builder.Services.AddSwaggerGen(c =>
         Type = SecuritySchemeType.ApiKey,
         Scheme = "Bearer"
     });
+
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
@@ -68,35 +71,55 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // Configure JWT Authentication
-builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
-var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>();
-var key = Encoding.UTF8.GetBytes(jwtSettings.Key);
-builder.Services.AddAuthentication(options =>
+var jwtSection = builder.Configuration.GetSection("Jwt");
+var jwtSettings = jwtSection.Get<JwtSettings>();
+
+if (jwtSettings == null || string.IsNullOrWhiteSpace(jwtSettings.Key))
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.TokenValidationParameters = new TokenValidationParameters
+    throw new InvalidOperationException("JWT settings are not properly configured in appsettings.json");
+}
+
+// Register JWT settings as singleton
+builder.Services.AddSingleton<JwtSettings>(jwtSettings);
+
+// Configure JWT Bearer authentication
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
     {
-        ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(key),
-        ValidateIssuer = true,
-        ValidIssuer = jwtSettings.Issuer,
-        ValidateAudience = true,
-        ValidAudience = jwtSettings.Audience,
-        ValidateLifetime = true,
-        ClockSkew = TimeSpan.Zero
-    };
-});
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Key)),
+            ValidateIssuer = true,
+            ValidIssuer = jwtSettings.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwtSettings.Audience,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero
+        };
+
+        // Add custom event handler to handle both formats
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                // Get the token from the Authorization header
+                var token = context.Request.Headers["Authorization"].ToString();
+                
+                // If token doesn't start with "Bearer ", add it
+                if (!string.IsNullOrEmpty(token) && !token.StartsWith("Bearer "))
+                {
+                    context.Request.Headers["Authorization"] = $"Bearer {token}";
+                }
+                
+                return Task.CompletedTask;
+            }
+        };
+    });
 
 // Configure DbContext
-builder.Services.AddDbContext<LedgerDbContext>(options => 
+builder.Services.AddDbContext<LedgerDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("LedgerDb")));
-
-// Register background services
-builder.Services.AddHostedService<InterestService>();
 
 // Add health checks
 builder.Services.AddHealthChecks()
@@ -104,7 +127,7 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -116,45 +139,17 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
-// Enable Authentication & Authorization
 app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers();
-
-// Map health checks
 app.MapHealthChecks("/healthz");
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
-
+// JwtSettings class moved here for clarity
 public class JwtSettings
 {
-    public string Key { get; set; }
-    public string Issuer { get; set; }
-    public string Audience { get; set; }
+    public string Key { get; set; } = string.Empty;
+    public string Issuer { get; set; } = string.Empty;
+    public string Audience { get; set; } = string.Empty;
 }
