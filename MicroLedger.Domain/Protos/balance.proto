@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+option csharp_namespace = "MicroLedger.Domain.Protos";
+
+package balance;
+
+// The balance service definition
+service BalanceService {
+  // Stream balance updates for an account
+  rpc StreamBalanceUpdates (BalanceRequest) returns (stream BalanceUpdate);
+}
+
+// The request message containing the account ID
+message BalanceRequest {
+  string account_id = 1;
+}
+
+// The response message containing the balance update
+message BalanceUpdate {
+  string account_id = 1;
+  double balance = 2;
+  string currency = 3;
+  string transaction_id = 4;
+  string transaction_type = 5;
+  string timestamp_utc = 6;
+} 

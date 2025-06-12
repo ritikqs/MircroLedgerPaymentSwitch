@@ -17,8 +17,20 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Logs;
 using MicroLedger.Application.Services;
 using MicroLedger.Application.Services.Interfaces;
+using MicroLedger.Infrastructure.Services;
+using MassTransit;
+using MicroLedger.Domain.Services;
+using MicroLedger.Domain.Interfaces;
+using System.Globalization;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure culture settings
+var defaultCulture = new CultureInfo("en-US");
+CultureInfo.DefaultThreadCurrentCulture = defaultCulture;
+CultureInfo.DefaultThreadCurrentUICulture = defaultCulture;
+CultureInfo.CurrentCulture = defaultCulture;
+CultureInfo.CurrentUICulture = defaultCulture;
 
 // Configure Serilog
 Log.Logger = new LoggerConfiguration()
@@ -115,13 +127,43 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddDbContext<LedgerDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("LedgerDb")));
 
+// Register DbContext interface
+builder.Services.AddScoped<ILedgerDbContext>(sp => sp.GetRequiredService<LedgerDbContext>());
+
 // Add health checks
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<LedgerDbContext>();
 
 builder.Services.AddScoped<IPaymentService, PaymentService>();
-builder.Services.AddScoped<ITransactionService, TransactionService>();
-builder.Services.AddHostedService<InterestService>();
+builder.Services.AddScoped<MicroLedger.Domain.Services.IInterestService, MicroLedger.Infrastructure.Services.InterestService>();
+builder.Services.AddScoped<MicroLedger.Domain.Services.IBalanceService, MicroLedger.Application.Services.BalanceService>();
+builder.Services.AddHostedService<MicroLedger.Infrastructure.InterestService>();
+
+// Add MassTransit configuration
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host("rabbitmq", "/", h =>
+        {
+            h.Username("guest");
+            h.Password("guest");
+        });
+
+        // Configure message serialization
+        cfg.UseJsonSerializer();
+        cfg.UseJsonDeserializer();
+
+        // Configure endpoints
+        cfg.ConfigureEndpoints(context);
+    });
+});
+
+// Register outbox services
+builder.Services.AddScoped<IOutboxService, OutboxService>();
+builder.Services.AddHostedService<OutboxPublisherService>();
+
+builder.Services.AddGrpc();
 
 var app = builder.Build();
 
@@ -155,6 +197,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/healthz");
+
+app.MapGrpcService<MicroLedger.Infrastructure.Services.BalanceService>();
 
 app.Run();
 

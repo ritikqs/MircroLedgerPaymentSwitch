@@ -1,9 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using MicroLedger.Domain;
+using MicroLedger.Domain.Interfaces;
 
 namespace MicroLedger.Infrastructure;
 
-public class LedgerDbContext : DbContext
+public class LedgerDbContext : DbContext, ILedgerDbContext
 {
     public LedgerDbContext(DbContextOptions<LedgerDbContext> options) : base(options) { }
 
@@ -11,6 +12,7 @@ public class LedgerDbContext : DbContext
     public DbSet<Transaction> Transactions { get; set; }
     public DbSet<JournalLine> JournalLines { get; set; }
     public DbSet<User> Users { get; set; }
+    public DbSet<OutboxEvent> OutboxEvents { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -43,6 +45,17 @@ public class LedgerDbContext : DbContext
                 .WithMany(t => t.JournalLines)
                 .HasForeignKey(j => j.TransactionId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Configure OutboxEvent
+        modelBuilder.Entity<OutboxEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.EventType).IsRequired();
+            entity.Property(e => e.EventData).IsRequired();
+            entity.Property(e => e.CreatedAt).IsRequired();
+            entity.Property(e => e.IsPublished).IsRequired();
+            entity.Property(e => e.RetryCount).IsRequired();
         });
     }
 } 

@@ -21,6 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\MicroLedger.Domain\MicroLedger.Domain.csproj" />
+    <ProjectReference Include="..\MicroLedger.Application\MicroLedger.Application.csproj" />
     <ProjectReference Include="..\MicroLedger.Infrastructure\MicroLedger.Infrastructure.csproj" />
   </ItemGroup>
 

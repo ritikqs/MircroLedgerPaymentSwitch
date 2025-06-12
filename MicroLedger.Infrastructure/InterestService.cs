@@ -3,6 +3,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MicroLedger.Domain;
+using MicroLedger.Domain.Services;
+using MicroLedger.Domain.Events;
 using System;
 using System.Linq;
 using System.Threading;
@@ -64,6 +66,7 @@ public class InterestService : BackgroundService
         _logger.LogInformation("Starting daily interest calculation");
         using var scope = _services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<LedgerDbContext>();
+        var outboxService = scope.ServiceProvider.GetRequiredService<IOutboxService>();
         
         var rate = _config.GetValue<decimal>("Interest:AnnualRate");
         var dailyRate = _calculator.GetDailyRate(rate);
@@ -96,30 +99,31 @@ public class InterestService : BackgroundService
                 db.Transactions.Add(transaction);
 
                 // Create journal lines
-                db.JournalLines.Add(new JournalLine
+                var journalLine = new JournalLine
                 {
                     Id = Guid.NewGuid().ToString(),
                     TransactionId = transaction.Id,
                     AccountId = account.Id,
                     Debit = 0,
                     Credit = interest
-                });
+                };
 
-                db.JournalLines.Add(new JournalLine
-                {
-                    Id = Guid.NewGuid().ToString(),
-                    TransactionId = transaction.Id,
-                    AccountId = "BANK_CAPITAL",
-                    Debit = interest,
-                    Credit = 0
-                });
-
+                db.JournalLines.Add(journalLine);
                 await db.SaveChangesAsync();
-                _logger.LogInformation("Posted interest {Interest} to account {AccountId}", interest, account.Id);
+
+                // Publish event
+                var @event = new InterestAccrued(
+                    TransactionId: transaction.Id,
+                    AccountId: account.Id,
+                    Amount: interest,
+                    TimestampUtc: transaction.TimestampUtc
+                );
+
+                await outboxService.AddEventAsync(@event, @event.EventType);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error calculating interest for account {AccountId}", account.Id);
+                _logger.LogError(ex, "Error processing interest for account {AccountId}", account.Id);
             }
         }
     }

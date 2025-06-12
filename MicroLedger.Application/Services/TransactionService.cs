@@ -1,17 +1,17 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using MicroLedger.Application.Services.Interfaces;
-using MicroLedger.Infrastructure;
-using MicroLedger.Application;
+using MicroLedger.Domain.Interfaces;
+using MicroLedger.Domain;
 
 namespace MicroLedger.Application.Services;
 
 public class TransactionService : ITransactionService
 {
-    private readonly LedgerDbContext _db;
+    private readonly ILedgerDbContext _db;
     private readonly ILogger<TransactionService> _logger;
 
-    public TransactionService(LedgerDbContext db, ILogger<TransactionService> logger)
+    public TransactionService(ILedgerDbContext db, ILogger<TransactionService> logger)
     {
         _db = db;
         _logger = logger;

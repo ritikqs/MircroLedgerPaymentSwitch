@@ -1,20 +1,33 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using MicroLedger.Application.Services.Interfaces;
-using MicroLedger.Infrastructure;
+using MicroLedger.Domain.Interfaces;
 using MicroLedger.Domain;
+using MicroLedger.Domain.Services;
+using MicroLedger.Domain.Events;
+using MicroLedger.Infrastructure.Services;
+using System;
+using System.Threading.Tasks;
 
 namespace MicroLedger.Application.Services;
 
 public class PaymentService : IPaymentService
 {
-    private readonly LedgerDbContext _db;
+    private readonly ILedgerDbContext _db;
     private readonly ILogger<PaymentService> _logger;
+    private readonly IOutboxService _outboxService;
+    private readonly IBalanceService _balanceService;
 
-    public PaymentService(LedgerDbContext db, ILogger<PaymentService> logger)
+    public PaymentService(
+        ILedgerDbContext db,
+        ILogger<PaymentService> logger,
+        IOutboxService outboxService,
+        IBalanceService balanceService)
     {
         _db = db;
         _logger = logger;
+        _outboxService = outboxService;
+        _balanceService = balanceService;
     }
 
     public async Task<PaymentResponse> ProcessPaymentAsync(PaymentRequest request)
@@ -52,25 +65,54 @@ public class PaymentService : IPaymentService
         _db.Transactions.Add(transaction);
 
         // Create journal lines
-        _db.JournalLines.Add(new JournalLine
+        var debitLine = new JournalLine
         {
             Id = Guid.NewGuid().ToString(),
             TransactionId = transaction.Id,
             AccountId = fromAccount.Id,
             Debit = request.Amount,
             Credit = 0
-        });
+        };
 
-        _db.JournalLines.Add(new JournalLine
+        var creditLine = new JournalLine
         {
             Id = Guid.NewGuid().ToString(),
             TransactionId = transaction.Id,
             AccountId = toAccount.Id,
             Debit = 0,
             Credit = request.Amount
-        });
+        };
 
+        _db.JournalLines.Add(debitLine);
+        _db.JournalLines.Add(creditLine);
         await _db.SaveChangesAsync();
+
+        // Publish event
+        var @event = new TransactionPosted(
+            TransactionId: transaction.Id,
+            Reference: transaction.Reference,
+            TimestampUtc: transaction.TimestampUtc,
+            JournalLines: new List<JournalLineDto>
+            {
+                new(Id: debitLine.Id, AccountId: debitLine.AccountId, Debit: debitLine.Debit, Credit: debitLine.Credit),
+                new(Id: creditLine.Id, AccountId: creditLine.AccountId, Debit: creditLine.Debit, Credit: creditLine.Credit)
+            }
+        );
+
+        await _outboxService.AddEventAsync(@event, @event.EventType);
+
+        // Publish balance updates for both accounts
+        await _balanceService.PublishBalanceUpdateAsync(
+            fromAccount.Id,
+            transaction.Id,
+            "Payment"
+        );
+
+        await _balanceService.PublishBalanceUpdateAsync(
+            toAccount.Id,
+            transaction.Id,
+            "Payment"
+        );
 
         return new PaymentResponse(
             TransactionId: transaction.Id,

@@ -1,4 +1,5 @@
 using MicroLedger.Application;
+using MicroLedger.Domain;
 
 namespace MicroLedger.Application.Services.Interfaces;
 

@@ -10,7 +10,7 @@ using System.Security.Claims;
 namespace MicroLedger.Api.Controllers;
 
 [ApiController]
-[Route("api/accounts")]
+[Route("api/[controller]")]
 [Authorize] // Require JWT authentication
 public class AccountsController : ControllerBase
 {
@@ -30,7 +30,7 @@ public class AccountsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<AccountBalanceDto>> GetBalance(string id)
+    public async Task<ActionResult<AccountBalanceDto>> GetBalance(string id, [FromQuery] DateTime? asOfDate = null)
     {
         _logger.LogInformation("GetBalance called for account {AccountId}", id);
         try
@@ -67,13 +67,18 @@ public class AccountsController : ControllerBase
             var query = _db.JournalLines
                 .Where(j => j.AccountId == id);
 
+            if (asOfDate.HasValue)
+            {
+                query = query.Where(j => j.Transaction.TimestampUtc <= asOfDate.Value);
+            }
+
             var balance = await query.SumAsync(j => j.Credit - j.Debit);
 
             var response = new AccountBalanceDto(
                 AccountId: id,
                 Balance: balance,
                 Currency: account.Currency,
-                AsOfDate: DateTime.UtcNow
+                AsOfDate: asOfDate ?? DateTime.UtcNow
             );
 
             _logger.LogInformation("Successfully retrieved balance for account {AccountId}", id);
@@ -83,6 +88,42 @@ public class AccountsController : ControllerBase
         {
             _logger.LogError(ex, "Error retrieving balance for account {AccountId}", id);
             return StatusCode(500, "An error occurred while retrieving the balance");
+        }
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<IEnumerable<Account>>> GetAccounts()
+    {
+        try
+        {
+            var accounts = await _db.Accounts.ToListAsync();
+            return Ok(accounts);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving accounts");
+            return StatusCode(500, "An error occurred while retrieving accounts");
+        }
+    }
+
+    [HttpGet("{id}")]
+    public async Task<ActionResult<Account>> GetAccount(string id)
+    {
+        try
+        {
+            var account = await _db.Accounts.FindAsync(id);
+
+            if (account == null)
+            {
+                return NotFound($"Account {id} not found");
+            }
+
+            return account;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving account {AccountId}", id);
+            return StatusCode(500, "An error occurred while retrieving the account");
         }
     }
 } 
