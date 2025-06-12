@@ -14,8 +14,13 @@ namespace MicroLedger.Api.Controllers;
 public class PaymentController : ControllerBase
 {
     private readonly LedgerDbContext _db;
+    private readonly ILogger<PaymentController> _logger;
     
-    public PaymentController(LedgerDbContext db) => _db = db;
+    public PaymentController(LedgerDbContext db, ILogger<PaymentController> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
     
     [HttpGet("accounts/{accountId}/balance")]
     public async Task<ActionResult<AccountBalanceDto>> GetAccountBalance(
@@ -101,16 +106,39 @@ public class PaymentController : ControllerBase
     }
     
     [HttpGet("{id}")]
-    public async Task<ActionResult<Transaction>> GetTransaction(string id)
+    [Produces("application/json")]
+    public async Task<ActionResult<TransactionDto>> GetTransaction(string id)
     {
-        var transaction = await _db.Transactions
-            .Include(t => t.JournalLines)
-            .FirstOrDefaultAsync(t => t.Id == id);
-            
-        if (transaction == null)
-            return NotFound();
-            
-        return transaction;
+        try
+        {
+            var transaction = await _db.Transactions
+                .Include(t => t.JournalLines)
+                .FirstOrDefaultAsync(t => t.Id == id);
+                
+            if (transaction == null)
+            {
+                return NotFound($"Transaction {id} not found");
+            }
+
+            var transactionDto = new TransactionDto(
+                Id: transaction.Id,
+                Reference: transaction.Reference,
+                TimestampUtc: transaction.TimestampUtc,
+                JournalLines: transaction.JournalLines.Select(jl => new JournalLineDto(
+                    Id: jl.Id,
+                    AccountId: jl.AccountId,
+                    Debit: jl.Debit,
+                    Credit: jl.Credit
+                )).ToList()
+            );
+
+            return Ok(transactionDto);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving transaction {TransactionId}", id);
+            return StatusCode(500, "An error occurred while retrieving the transaction");
+        }
     }
     
     private async Task<AccountBalanceDto> GetBalance(string accountId, DateTime? asOfDate = null)
