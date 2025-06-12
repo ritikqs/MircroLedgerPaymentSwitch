@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MicroLedger.Infrastructure;
 using MicroLedger.Domain;
 using System.Threading.Tasks;
-using MicroLedger.Api.DTOs;
+using MicroLedger.Application;
 using System.Security.Claims;
 
 namespace MicroLedger.Api.Controllers;
@@ -81,7 +81,7 @@ public class AccountsController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting balance for account {AccountId}", id);
+            _logger.LogError(ex, "Error retrieving balance for account {AccountId}", id);
             return StatusCode(500, "An error occurred while retrieving the balance");
         }
     }

@@ -10,6 +10,13 @@ using OpenTelemetry.Trace;
 using Serilog;
 using System.Text;
 using MicroLedger.Api.Models;
+using MicroLedger.Api.Controllers;
+using MicroLedger.Domain;
+using MicroLedger.Application;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Logs;
+using MicroLedger.Application.Services;
+using MicroLedger.Application.Services.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,13 +29,14 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
-// Configure OpenTelemetry
+// Add OpenTelemetry
 builder.Services.AddOpenTelemetry()
-    .WithTracing(tracerProviderBuilder =>
-        tracerProviderBuilder
-            .AddSource("MicroLedger")
-            .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService("MicroLedger"))
-            .AddConsoleExporter());
+    .ConfigureResource(resource => resource
+        .AddService(serviceName: "MicroLedger.Api"))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddSource("MicroLedger.Api")
+        .AddConsoleExporter());
 
 // Add services to the container
 builder.Services.AddControllers();
@@ -71,16 +79,8 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // Configure JWT Authentication
-var jwtSection = builder.Configuration.GetSection("Jwt");
-var jwtSettings = jwtSection.Get<JwtSettings>();
-
-if (jwtSettings == null || string.IsNullOrWhiteSpace(jwtSettings.Key))
-{
-    throw new InvalidOperationException("JWT settings are not properly configured in appsettings.json");
-}
-
-// Register JWT settings as singleton
-builder.Services.AddSingleton<JwtSettings>(jwtSettings);
+var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>();
+builder.Services.AddSingleton(jwtSettings);
 
 // Configure JWT Bearer authentication
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -88,30 +88,24 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     {
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Key)),
             ValidateIssuer = true,
-            ValidIssuer = jwtSettings.Issuer,
             ValidateAudience = true,
-            ValidAudience = jwtSettings.Audience,
             ValidateLifetime = true,
-            ClockSkew = TimeSpan.Zero
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtSettings.Issuer,
+            ValidAudience = jwtSettings.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Key))
         };
 
-        // Add custom event handler to handle both formats
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
             {
-                // Get the token from the Authorization header
                 var token = context.Request.Headers["Authorization"].ToString();
-                
-                // If token doesn't start with "Bearer ", add it
                 if (!string.IsNullOrEmpty(token) && !token.StartsWith("Bearer "))
                 {
                     context.Request.Headers["Authorization"] = $"Bearer {token}";
                 }
-                
                 return Task.CompletedTask;
             }
         };
@@ -125,7 +119,18 @@ builder.Services.AddDbContext<LedgerDbContext>(options =>
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<LedgerDbContext>();
 
+builder.Services.AddScoped<IPaymentService, PaymentService>();
+builder.Services.AddScoped<ITransactionService, TransactionService>();
+builder.Services.AddHostedService<InterestService>();
+
 var app = builder.Build();
+
+// Seed test data
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<LedgerDbContext>();
+    await TestDataSeeder.SeedTestData(db);
+}
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())

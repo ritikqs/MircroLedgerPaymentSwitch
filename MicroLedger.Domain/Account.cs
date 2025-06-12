@@ -9,6 +9,4 @@ public class Account
     public string Currency { get; set; } = "USD";
     public AccountType Type { get; set; }
     public string OwnerId { get; set; } // For authz
-}
-
-public enum AccountType { Current, Savings } 
+} 

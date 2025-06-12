@@ -7,18 +7,24 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace MicroLedger.Infrastructure;
 
 public class InterestService : BackgroundService
 {
     private readonly IServiceProvider _services;
+    private readonly ILogger<InterestService> _logger;
     private readonly IConfiguration _config;
     private readonly InterestCalculator _calculator;
     
-    public InterestService(IServiceProvider services, IConfiguration config)
+    public InterestService(
+        IServiceProvider services,
+        ILogger<InterestService> logger,
+        IConfiguration config)
     {
         _services = services;
+        _logger = logger;
         _config = config;
         _calculator = new InterestCalculator();
     }
@@ -27,47 +33,95 @@ public class InterestService : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTime.UtcNow;
-            var nextRun = now.Date.AddDays(now.TimeOfDay < TimeSpan.FromHours(2) ? 0 : 1).AddHours(2); // Next 2 AM UTC
-            var delay = nextRun - now;
-            if (delay > TimeSpan.Zero)
+            try
+            {
+                // Calculate next run time (02:00 UTC)
+                var now = DateTime.UtcNow;
+                var nextRun = now.Date.AddDays(1).AddHours(2);
+                var delay = nextRun - now;
+
+                _logger.LogInformation("Next interest calculation scheduled for {NextRun}", nextRun);
                 await Task.Delay(delay, stoppingToken);
-            await AccrueInterest();
-            // Wait 24 hours for the next run
-            await Task.Delay(TimeSpan.FromDays(1), stoppingToken);
+
+                await CalculateAndPostInterest();
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal shutdown
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred while calculating interest");
+                // Wait 5 minutes before retrying on error
+                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+            }
         }
     }
     
-    private async Task AccrueInterest()
+    private async Task CalculateAndPostInterest()
     {
+        _logger.LogInformation("Starting daily interest calculation");
         using var scope = _services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<LedgerDbContext>();
+        
         var rate = _config.GetValue<decimal>("Interest:AnnualRate");
         var dailyRate = _calculator.GetDailyRate(rate);
+        
         var savingsAccounts = await db.Accounts
             .Where(a => a.Type == AccountType.Savings)
             .ToListAsync();
+
         foreach (var account in savingsAccounts)
         {
-            var balance = await db.JournalLines
-                .Where(j => j.AccountId == account.Id)
-                .SumAsync(j => j.Credit - j.Debit);
-            if (balance <= 0) continue;
-            var interest = _calculator.CalculateInterest(balance, dailyRate);
-            var tx = new Transaction { Reference = "Daily Interest" };
-            tx.JournalLines.Add(new JournalLine {
-                AccountId = account.Id,
-                Debit = 0,
-                Credit = interest
-            });
-            tx.JournalLines.Add(new JournalLine {
-                AccountId = "BANK_CAPITAL", // Special account
-                Debit = interest,
-                Credit = 0
-            });
-            db.Transactions.Add(tx);
+            try
+            {
+                var balance = await db.JournalLines
+                    .Where(j => j.AccountId == account.Id)
+                    .SumAsync(j => j.Credit - j.Debit);
+
+                if (balance <= 0) continue;
+
+                var interest = _calculator.CalculateInterest(balance, dailyRate);
+                _logger.LogInformation("Calculated interest {Interest} for account {AccountId}", interest, account.Id);
+
+                // Create transaction for interest
+                var transaction = new Transaction
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Reference = "Daily Interest",
+                    TimestampUtc = DateTime.UtcNow
+                };
+
+                db.Transactions.Add(transaction);
+
+                // Create journal lines
+                db.JournalLines.Add(new JournalLine
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    TransactionId = transaction.Id,
+                    AccountId = account.Id,
+                    Debit = 0,
+                    Credit = interest
+                });
+
+                db.JournalLines.Add(new JournalLine
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    TransactionId = transaction.Id,
+                    AccountId = "BANK_CAPITAL",
+                    Debit = interest,
+                    Credit = 0
+                });
+
+                await db.SaveChangesAsync();
+                _logger.LogInformation("Posted interest {Interest} to account {AccountId}", interest, account.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error calculating interest for account {AccountId}", account.Id);
+            }
         }
-        await db.SaveChangesAsync();
     }
 }
 

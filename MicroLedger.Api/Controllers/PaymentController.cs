@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using MicroLedger.Infrastructure;
 using MicroLedger.Domain;
 using System.Threading.Tasks;
-using MicroLedger.Api.DTOs;
+using MicroLedger.Application;
 
 namespace MicroLedger.Api.Controllers;
 
