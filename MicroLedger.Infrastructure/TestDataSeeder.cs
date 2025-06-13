@@ -17,6 +17,7 @@ public static class TestDataSeeder
         // Create test users
         var adminUser = new User
         {
+            Id = 1,
             Username = "admin",
             Password = "admin123", // In production, this should be hashed
             Role = "BankAdmin"
@@ -24,6 +25,7 @@ public static class TestDataSeeder
 
         var customerUser = new User
         {
+            Id = 2,
             Username = "customer",
             Password = "customer123", // In production, this should be hashed
             Role = "Customer"
@@ -36,19 +38,17 @@ public static class TestDataSeeder
         var checkingAccount = new Account
         {
             OwnerName = "John Doe",
-            OwnerId = customerUser.Id,
+            OwnerId = "1",
             Currency = "USD",
-            Type = AccountType.Checking,
-            Balance = 1000.00m
+            Type = AccountType.Checking
         };
 
         var savingsAccount = new Account
         {
             OwnerName = "John Doe",
-            OwnerId = customerUser.Id,
+            OwnerId = "2",
             Currency = "USD",
             Type = AccountType.Savings,
-            Balance = 5000.00m,
             InterestRate = 0.05m // 5% annual interest rate
         };
 

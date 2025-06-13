@@ -37,11 +37,16 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<ActionResult<object>> Login([FromBody] LoginRequest request)
     {
+        Console.WriteLine("Login endpoint hit");
+        Console.WriteLine($"Request received: Username={request?.Username}, Password={request?.Password}");
+
         if (string.IsNullOrWhiteSpace(request?.Username) || string.IsNullOrWhiteSpace(request.Password))
             return BadRequest("Username and password are required");
 
         var user = await _db.Users
             .FirstOrDefaultAsync(u => u.Username == request.Username && u.Password == request.Password);
+
+        Console.WriteLine($"User found: {user != null}");
 
         if (user == null)
         {
@@ -60,6 +65,7 @@ public class AuthController : ControllerBase
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"Token generation failed: {ex}");
             return StatusCode(500, $"Token generation failed: {ex.Message}");
         }
     }

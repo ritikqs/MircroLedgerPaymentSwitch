@@ -1,51 +1,45 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using MicroLedger.Domain;
-using MicroLedger.Domain.Interfaces;
-using MicroLedger.Domain.Events;
 using System;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MicroLedger.Domain;
+using MicroLedger.Domain.Interfaces;
 
-namespace MicroLedger.Infrastructure;
+namespace MicroLedger.Infrastructure.Services;
 
-public class InterestService : BackgroundService
+public class InterestAccrualService : BackgroundService
 {
     private readonly IServiceProvider _services;
-    private readonly ILogger<InterestService> _logger;
-    private readonly IConfiguration _config;
-    private readonly InterestCalculator _calculator;
-    
-    public InterestService(
+    private readonly ILogger<InterestAccrualService> _logger;
+    private readonly decimal _annualRate;
+
+    public InterestAccrualService(
         IServiceProvider services,
-        ILogger<InterestService> logger,
-        IConfiguration config)
+        ILogger<InterestAccrualService> logger,
+        decimal annualRate)
     {
         _services = services;
         _logger = logger;
-        _config = config;
-        _calculator = new InterestCalculator();
+        _annualRate = annualRate;
     }
-    
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                // Calculate next run time (02:00 UTC)
                 var now = DateTime.UtcNow;
-                var nextRun = now.Date.AddDays(1).AddHours(2);
+                var nextRun = now.Date.AddDays(1).AddHours(2); // Next 02:00 UTC
                 var delay = nextRun - now;
 
-                _logger.LogInformation("Next interest calculation scheduled for {NextRun}", nextRun);
+                _logger.LogInformation("Next interest accrual scheduled for {NextRun}", nextRun);
                 await Task.Delay(delay, stoppingToken);
 
-                await CalculateAndPostInterest();
+                await ProcessInterestAccrualAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -54,27 +48,26 @@ public class InterestService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in interest calculation service");
+                _logger.LogError(ex, "Error occurred while processing interest accrual");
                 // Wait 5 minutes before retrying on error
                 await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
             }
         }
     }
 
-    private async Task CalculateAndPostInterest()
+    private async Task ProcessInterestAccrualAsync(CancellationToken stoppingToken)
     {
         using var scope = _services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ILedgerDbContext>();
-        var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService>();
 
         try
         {
-            _logger.LogInformation("Starting interest calculation process");
+            _logger.LogInformation("Starting daily interest accrual process");
 
             // Get all savings accounts
             var savingsAccounts = await db.Accounts
                 .Where(a => a.Type == AccountType.Savings)
-                .ToListAsync();
+                .ToListAsync(stoppingToken);
 
             foreach (var account in savingsAccounts)
             {
@@ -83,10 +76,10 @@ public class InterestService : BackgroundService
                     // Calculate balance as of now
                     var balance = await db.JournalLines
                         .Where(j => j.AccountId == account.Id)
-                        .SumAsync(j => j.Credit - j.Debit);
+                        .SumAsync(j => j.Credit - j.Debit, stoppingToken);
 
                     // Calculate daily interest
-                    var dailyRate = account.InterestRate / 365;
+                    var dailyRate = _annualRate / 365;
                     var interestAmount = balance * dailyRate;
 
                     if (interestAmount > 0)
@@ -97,8 +90,8 @@ public class InterestService : BackgroundService
                             Reference = $"Daily Interest Accrual {DateTime.UtcNow:yyyy-MM-dd}"
                         };
 
-                        await db.Transactions.AddAsync(transaction);
-                        await db.SaveChangesAsync();
+                        await db.Transactions.AddAsync(transaction, stoppingToken);
+                        await db.SaveChangesAsync(stoppingToken);
 
                         // Create journal lines for the interest accrual
                         var customerJournalLine = new JournalLine
@@ -119,18 +112,8 @@ public class InterestService : BackgroundService
                             Transaction = transaction
                         };
 
-                        await db.JournalLines.AddRangeAsync(customerJournalLine, bankJournalLine);
-                        await db.SaveChangesAsync();
-
-                        // Publish event
-                        var interestEvent = new InterestAccrued(
-                            transaction.Id,
-                            account.Id,
-                            interestAmount,
-                            DateTime.UtcNow
-                        );
-
-                        await outbox.SaveEventAsync(interestEvent);
+                        await db.JournalLines.AddRangeAsync(new[] { customerJournalLine, bankJournalLine }, stoppingToken);
+                        await db.SaveChangesAsync(stoppingToken);
 
                         _logger.LogInformation(
                             "Interest of {InterestAmount} accrued for account {AccountId}",
@@ -145,17 +128,13 @@ public class InterestService : BackgroundService
                     // Continue with next account
                 }
             }
+
+            _logger.LogInformation("Completed daily interest accrual process");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in interest calculation process");
+            _logger.LogError(ex, "Error in interest accrual process");
             throw;
         }
     }
-}
-
-public class InterestCalculator
-{
-    public decimal GetDailyRate(decimal annualRate) => annualRate / 365;
-    public decimal CalculateInterest(decimal balance, decimal dailyRate) => Math.Round(balance * dailyRate, 2);
 } 

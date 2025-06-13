@@ -92,7 +92,13 @@ builder.Services.AddSwaggerGen(c =>
 
 // Configure JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>();
-builder.Services.AddSingleton(jwtSettings);
+if (jwtSettings == null)
+{
+    throw new InvalidOperationException("JWT settings are not configured in appsettings.json");
+}
+
+// Register JwtSettings as a singleton service
+builder.Services.AddSingleton<JwtSettings>(jwtSettings);
 
 // Configure JWT Bearer authentication
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -138,6 +144,17 @@ builder.Services.AddScoped<IPaymentService, PaymentService>();
 //builder.Services.AddScoped<MicroLedger.Domain.Services.IInterestService, MicroLedger.Infrastructure.Services.InterestService>();
 builder.Services.AddScoped<MicroLedger.Domain.Services.IBalanceService, MicroLedger.Application.Services.BalanceService>();
 builder.Services.AddHostedService<MicroLedger.Infrastructure.InterestService>();
+
+// Add background services
+builder.Services.AddHostedService<InterestAccrualService>(sp =>
+{
+    var annualRate = builder.Configuration.GetValue<decimal>("Interest:AnnualRate");
+    return new InterestAccrualService(
+        sp,
+        sp.GetRequiredService<ILogger<InterestAccrualService>>(),
+        annualRate
+    );
+});
 
 // Add MassTransit configuration
 builder.Services.AddMassTransit(x =>
@@ -205,11 +222,4 @@ app.Run();
 // Make Program class public and partial
 public partial class Program
 {
-    // JwtSettings class moved here for clarity
-    public class JwtSettings
-    {
-        public string Key { get; set; } = string.Empty;
-        public string Issuer { get; set; } = string.Empty;
-        public string Audience { get; set; } = string.Empty;
-    }
 }

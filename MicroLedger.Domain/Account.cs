@@ -9,6 +9,5 @@ public class Account
     public required string OwnerId { get; set; }
     public required string Currency { get; set; }
     public AccountType Type { get; set; }
-    public decimal Balance { get; set; }
     public decimal InterestRate { get; set; } // Annual interest rate as a decimal (e.g., 0.05 for 5%)
 } 

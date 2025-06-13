@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MicroLedger.Domain;
 using MicroLedger.Domain.Interfaces;
 
+
 namespace MicroLedger.Infrastructure;
 
 public class LedgerDbContext : DbContext, ILedgerDbContext
@@ -27,7 +28,7 @@ public class LedgerDbContext : DbContext, ILedgerDbContext
             entity.Property(e => e.OwnerName).IsRequired();
             entity.Property(e => e.OwnerId).IsRequired();
             entity.Property(e => e.Currency).IsRequired();
-            entity.Property(e => e.Balance).HasPrecision(18, 2);
+            entity.Property(e => e.InterestRate).HasPrecision(18, 4);
         });
 
         modelBuilder.Entity<Transaction>(entity =>
@@ -54,7 +55,7 @@ public class LedgerDbContext : DbContext, ILedgerDbContext
         modelBuilder.Entity<User>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Id).HasMaxLength(36);
+            entity.Property(e => e.Id).ValueGeneratedOnAdd();
             entity.Property(e => e.Username).IsRequired();
             entity.Property(e => e.Password).IsRequired();
             entity.Property(e => e.Role).IsRequired();
