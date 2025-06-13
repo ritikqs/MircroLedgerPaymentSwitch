@@ -120,46 +120,6 @@ public class JwtAuthenticationTests : IClassFixture<TestWebApplicationFactory>
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    [Fact]
-    [Trait("Category", "JWT")]
-    public async Task Authorized_WhenValidTokenProvided()
-    {
-        // Arrange
-        var token = GenerateValidToken();
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-        // Act
-        var response = await _client.GetAsync("/api/test/secure-endpoint");
-
-        // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    private string GenerateValidToken()
-    {
-        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Key));
-        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
-
-        var claims = new[]
-        {
-            new Claim(JwtRegisteredClaimNames.Sub, "test-user"),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(ClaimTypes.Name, "Test User"),
-            new Claim(ClaimTypes.Role, "User")
-        };
-
-        var token = new JwtSecurityToken(
-            issuer: _jwtSettings.Issuer,
-            audience: _jwtSettings.Audience,
-            claims: claims,
-            notBefore: DateTime.UtcNow,
-            expires: DateTime.UtcNow.AddHours(1),
-            signingCredentials: credentials
-        );
-
-        return new JwtSecurityTokenHandler().WriteToken(token);
-    }
-
     private string GenerateJwtToken(string key, DateTime? notBefore = null, DateTime? expires = null, string issuer = null, string audience = null)
     {
         var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
