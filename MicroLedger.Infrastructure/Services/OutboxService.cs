@@ -1,71 +1,67 @@
-using System.Text.Json;
-using MicroLedger.Domain.Services;
+using System;
+using System.Threading.Tasks;
+using MicroLedger.Domain;
 using MicroLedger.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using MassTransit;
-using MicroLedger.Domain;
 
 namespace MicroLedger.Infrastructure.Services;
 
 public class OutboxService : IOutboxService
 {
-    private readonly ILedgerDbContext _db;
-    private readonly ILogger<OutboxService> _logger;
-    private readonly IBus _bus;
+    private readonly ILedgerDbContext _dbContext;
+    private readonly IPublishEndpoint _publishEndpoint;
 
-    public OutboxService(
-        ILedgerDbContext db,
-        ILogger<OutboxService> logger,
-        IBus bus)
+    public OutboxService(ILedgerDbContext dbContext, IPublishEndpoint publishEndpoint)
     {
-        _db = db;
-        _logger = logger;
-        _bus = bus;
+        _dbContext = dbContext;
+        _publishEndpoint = publishEndpoint;
     }
 
-    public async Task AddEventAsync<T>(T eventData, string eventType) where T : class
+    public async Task SaveEventAsync<T>(T @event) where T : class
     {
         var outboxEvent = new OutboxEvent
         {
-            EventType = eventType,
-            EventData = JsonSerializer.Serialize(eventData),
-            CreatedAt = DateTime.UtcNow,
-            IsPublished = false,
-            RetryCount = 0
+            EventType = typeof(T).Name,
+            EventData = System.Text.Json.JsonSerializer.Serialize(@event),
+            TimestampUtc = DateTime.UtcNow
         };
 
-        _db.OutboxEvents.Add(outboxEvent);
-        await _db.SaveChangesAsync();
+        await _dbContext.OutboxEvents.AddAsync(outboxEvent);
+        await _dbContext.SaveChangesAsync();
     }
 
     public async Task PublishPendingEventsAsync()
     {
-        var unpublishedEvents = await _db.OutboxEvents
-            .Where(e => !e.IsPublished && e.RetryCount < 3)
-            .OrderBy(e => e.CreatedAt)
+        var pendingEvents = await _dbContext.OutboxEvents
+            .Where(e => !e.IsPublished)
+            .OrderBy(e => e.TimestampUtc)
             .Take(100)
             .ToListAsync();
 
-        foreach (var evt in unpublishedEvents)
+        foreach (var @event in pendingEvents)
         {
             try
             {
-                var eventData = JsonSerializer.Deserialize<object>(evt.EventData);
-                await _bus.Publish(eventData, context => context.MessageId = Guid.Parse(evt.Id));
-
-                evt.IsPublished = true;
-                evt.PublishedAt = DateTime.UtcNow;
-                evt.Error = null;
+                var eventType = Type.GetType(@event.EventType);
+                if (eventType != null)
+                {
+                    var eventData = System.Text.Json.JsonSerializer.Deserialize(@event.EventData, eventType);
+                    if (eventData != null)
+                    {
+                        await _publishEndpoint.Publish(eventData);
+                        @event.IsPublished = true;
+                        @event.PublishedAtUtc = DateTime.UtcNow;
+                    }
+                }
             }
             catch (Exception ex)
             {
-                evt.RetryCount++;
-                evt.Error = ex.Message;
-                _logger.LogError(ex, "Error publishing event {EventId}", evt.Id);
+                @event.RetryCount++;
+                @event.Error = ex.Message;
             }
         }
 
-        await _db.SaveChangesAsync();
+        await _dbContext.SaveChangesAsync();
     }
 } 

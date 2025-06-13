@@ -1,39 +1,59 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using MicroLedger.Domain.Services;
+using MicroLedger.Domain.Interfaces;
+using MicroLedger.Domain;
+using System;
+using System.Threading.Tasks;
 
 namespace MicroLedger.Infrastructure.Services;
 
-public class OutboxPublisherService : BackgroundService
+public class OutboxPublisherService : IOutboxService
 {
-    private readonly IServiceProvider _services;
+    private readonly ILedgerDbContext _dbContext;
     private readonly ILogger<OutboxPublisherService> _logger;
 
     public OutboxPublisherService(
-        IServiceProvider services,
+        ILedgerDbContext dbContext,
         ILogger<OutboxPublisherService> logger)
     {
-        _services = services;
+        _dbContext = dbContext;
         _logger = logger;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    public async Task SaveEventAsync<T>(T @event) where T : class
     {
-        while (!stoppingToken.IsCancellationRequested)
+        var outboxEvent = new OutboxEvent
+        {
+            EventType = @event.GetType().Name,
+            EventData = System.Text.Json.JsonSerializer.Serialize(@event),
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await _dbContext.OutboxEvents.AddAsync(outboxEvent);
+        await _dbContext.SaveChangesAsync();
+    }
+
+    public async Task PublishPendingEventsAsync()
+    {
+        var pendingEvents = await _dbContext.OutboxEvents
+            .Where(e => e.PublishedAtUtc == null)
+            .OrderBy(e => e.TimestampUtc)
+            .ToListAsync();
+
+        foreach (var @event in pendingEvents)
         {
             try
             {
-                using var scope = _services.CreateScope();
-                var outboxService = scope.ServiceProvider.GetRequiredService<IOutboxService>();
-                await outboxService.PublishPendingEventsAsync();
+                // TODO: Implement actual event publishing
+                @event.PublishedAtUtc = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in outbox publisher service");
+                _logger.LogError(ex, "Error publishing event {EventId}", @event.Id);
             }
-
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
     }
 } 

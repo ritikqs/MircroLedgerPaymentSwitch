@@ -3,7 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using MicroLedger.Domain;
-using MicroLedger.Domain.Services;
+using MicroLedger.Domain.Interfaces;
 using MicroLedger.Domain.Events;
 using System;
 using System.Linq;
@@ -91,35 +91,48 @@ public class InterestService : BackgroundService
                 // Create transaction for interest
                 var transaction = new Transaction
                 {
-                    Id = Guid.NewGuid().ToString(),
                     Reference = "Daily Interest",
                     TimestampUtc = DateTime.UtcNow
                 };
 
                 db.Transactions.Add(transaction);
+                await db.SaveChangesAsync();
 
                 // Create journal lines
-                var journalLine = new JournalLine
+                var debitLine = new JournalLine
                 {
-                    Id = Guid.NewGuid().ToString(),
                     TransactionId = transaction.Id,
-                    AccountId = account.Id,
-                    Debit = 0,
-                    Credit = interest
+                    AccountId = "BANK_CAPITAL", // System account for bank's capital
+                    Debit = interest,
+                    Credit = 0.00m,
+                    Transaction = transaction
                 };
 
-                db.JournalLines.Add(journalLine);
+                var creditLine = new JournalLine
+                {
+                    TransactionId = transaction.Id,
+                    AccountId = account.Id,
+                    Debit = 0.00m,
+                    Credit = interest,
+                    Transaction = transaction
+                };
+
+                db.JournalLines.AddRange(debitLine, creditLine);
+                await db.SaveChangesAsync();
+
+                // Update account balance
+                account.Balance += interest;
                 await db.SaveChangesAsync();
 
                 // Publish event
-                var @event = new InterestAccrued(
-                    TransactionId: transaction.Id,
-                    AccountId: account.Id,
-                    Amount: interest,
-                    TimestampUtc: transaction.TimestampUtc
+                var interestEvent = new InterestAccrued(
+                    transaction.Id,
+                    account.Id,
+                    interest,
+                    DateTime.UtcNow
                 );
 
-                await outboxService.AddEventAsync(@event, @event.EventType);
+                await outboxService.SaveEventAsync(interestEvent);
             }
             catch (Exception ex)
             {

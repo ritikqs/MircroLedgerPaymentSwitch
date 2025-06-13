@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
-using MicroLedger.Domain.Services;
 using MicroLedger.Domain;
 using MicroLedger.Domain.Interfaces;
 using MicroLedger.Domain.Events;
@@ -12,79 +11,87 @@ namespace MicroLedger.Infrastructure.Services
 {
     public class InterestService : IInterestService
     {
-        private readonly ILedgerDbContext _db;
+        private readonly ILedgerDbContext _dbContext;
         private readonly IOutboxService _outboxService;
         private readonly ILogger<InterestService> _logger;
-        private readonly IBalanceService _balanceService;
 
         public InterestService(
-            ILedgerDbContext db,
+            ILedgerDbContext dbContext,
             IOutboxService outboxService,
-            ILogger<InterestService> logger,
-            IBalanceService balanceService)
+            ILogger<InterestService> logger)
         {
-            _db = db;
+            _dbContext = dbContext;
             _outboxService = outboxService;
             _logger = logger;
-            _balanceService = balanceService;
         }
 
-        public async Task CalculateAndPostInterest()
+        public async Task AccrueDailyInterestAsync(decimal annualRate)
         {
-            _logger.LogInformation("Starting interest calculation");
-
-            var accounts = await _db.Accounts
-                .Where(a => a.InterestRate > 0)
+            var dailyRate = annualRate / 365;
+            var savingsAccounts = await _dbContext.Accounts
+                .Where(a => a.Type == AccountType.Savings)
                 .ToListAsync();
 
-            foreach (var account in accounts)
+            foreach (var account in savingsAccounts)
             {
-                var balance = await _db.JournalLines
-                    .Where(j => j.AccountId == account.Id)
-                    .SumAsync(j => j.Credit - j.Debit);
-
-                if (balance <= 0) continue;
-
-                var interestAmount = balance * (account.InterestRate / 365); // Daily interest
-
-                var transaction = new Transaction
+                try
                 {
-                    Id = Guid.NewGuid().ToString(),
-                    Reference = $"Interest for {account.Id}",
-                    TimestampUtc = DateTime.UtcNow
-                };
+                    var interestAmount = Math.Round(account.Balance * dailyRate, 2);
+                    if (interestAmount <= 0)
+                    {
+                        continue;
+                    }
 
-                var interestLine = new JournalLine
+                    // Create transaction for interest accrual
+                    var transaction = new Transaction
+                    {
+                        Reference = $"Daily Interest Accrual - {DateTime.UtcNow:yyyy-MM-dd}"
+                    };
+
+                    await _dbContext.Transactions.AddAsync(transaction);
+                    await _dbContext.SaveChangesAsync();
+
+                    // Create journal lines
+                    var debitLine = new JournalLine
+                    {
+                        TransactionId = transaction.Id,
+                        AccountId = "BANK_CAPITAL", // System account for bank's capital
+                        Debit = interestAmount,
+                        Credit = 0.00m,
+                        Transaction = transaction
+                    };
+
+                    var creditLine = new JournalLine
+                    {
+                        TransactionId = transaction.Id,
+                        AccountId = account.Id,
+                        Debit = 0.00m,
+                        Credit = interestAmount,
+                        Transaction = transaction
+                    };
+
+                    await _dbContext.JournalLines.AddRangeAsync(debitLine, creditLine);
+                    await _dbContext.SaveChangesAsync();
+
+                    // Update account balance
+                    account.Balance += interestAmount;
+                    await _dbContext.SaveChangesAsync();
+
+                    // Publish event
+                    var interestEvent = new InterestAccrued(
+                        transaction.Id,
+                        account.Id,
+                        interestAmount,
+                        DateTime.UtcNow
+                    );
+
+                    await _outboxService.SaveEventAsync(interestEvent);
+                }
+                catch (Exception ex)
                 {
-                    Id = Guid.NewGuid().ToString(),
-                    TransactionId = transaction.Id,
-                    AccountId = account.Id,
-                    Debit = 0,
-                    Credit = interestAmount
-                };
-
-                _db.JournalLines.Add(interestLine);
-                await _db.SaveChangesAsync();
-
-                // Publish interest event
-                var @event = new InterestAccrued(
-                    TransactionId: transaction.Id,
-                    AccountId: account.Id,
-                    Amount: interestAmount,
-                    TimestampUtc: transaction.TimestampUtc
-                );
-
-                await _outboxService.AddEventAsync(@event, @event.EventType);
-
-                // Publish balance update
-                await _balanceService.PublishBalanceUpdateAsync(
-                    account.Id,
-                    transaction.Id,
-                    "Interest"
-                );
+                    _logger.LogError(ex, "Error accruing interest for account {AccountId}", account.Id);
+                }
             }
-
-            _logger.LogInformation("Interest calculation completed");
         }
     }
 } 

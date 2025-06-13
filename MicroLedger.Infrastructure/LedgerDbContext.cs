@@ -6,7 +6,9 @@ namespace MicroLedger.Infrastructure;
 
 public class LedgerDbContext : DbContext, ILedgerDbContext
 {
-    public LedgerDbContext(DbContextOptions<LedgerDbContext> options) : base(options) { }
+    public LedgerDbContext(DbContextOptions<LedgerDbContext> options) : base(options)
+    {
+    }
 
     public DbSet<Account> Accounts { get; set; }
     public DbSet<Transaction> Transactions { get; set; }
@@ -18,44 +20,53 @@ public class LedgerDbContext : DbContext, ILedgerDbContext
     {
         base.OnModelCreating(modelBuilder);
 
-        // Seed test users for JWT auth
-        modelBuilder.Entity<User>().HasData(
-            new User { Id = 1, Username = "admin", Password = "admin123", Role = "BankAdmin" },
-            new User { Id = 2, Username = "customer", Password = "customer123", Role = "Customer" }
-        );
+        modelBuilder.Entity<Account>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasMaxLength(36);
+            entity.Property(e => e.OwnerName).IsRequired();
+            entity.Property(e => e.OwnerId).IsRequired();
+            entity.Property(e => e.Currency).IsRequired();
+            entity.Property(e => e.Balance).HasPrecision(18, 2);
+        });
 
-        // Configure Transaction
         modelBuilder.Entity<Transaction>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasMaxLength(36);
             entity.Property(e => e.Reference).IsRequired();
-            entity.Property(e => e.TimestampUtc).IsRequired();
-        });
-
-        // Configure JournalLine
-        modelBuilder.Entity<JournalLine>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Debit).HasPrecision(18, 2);
-            entity.Property(e => e.Credit).HasPrecision(18, 2);
-            entity.Property(e => e.AccountId).IsRequired();
-            entity.Property(e => e.TransactionId).IsRequired();
-
-            entity.HasOne(j => j.Transaction)
-                .WithMany(t => t.JournalLines)
-                .HasForeignKey(j => j.TransactionId)
+            entity.HasMany(e => e.JournalLines)
+                .WithOne(e => e.Transaction)
+                .HasForeignKey(e => e.TransactionId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // Configure OutboxEvent
+        modelBuilder.Entity<JournalLine>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasMaxLength(36);
+            entity.Property(e => e.TransactionId).IsRequired();
+            entity.Property(e => e.AccountId).IsRequired();
+            entity.Property(e => e.Debit).HasPrecision(18, 2);
+            entity.Property(e => e.Credit).HasPrecision(18, 2);
+        });
+
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasMaxLength(36);
+            entity.Property(e => e.Username).IsRequired();
+            entity.Property(e => e.Password).IsRequired();
+            entity.Property(e => e.Role).IsRequired();
+        });
+
         modelBuilder.Entity<OutboxEvent>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasMaxLength(36);
             entity.Property(e => e.EventType).IsRequired();
             entity.Property(e => e.EventData).IsRequired();
-            entity.Property(e => e.CreatedAt).IsRequired();
-            entity.Property(e => e.IsPublished).IsRequired();
-            entity.Property(e => e.RetryCount).IsRequired();
+            entity.Property(e => e.TimestampUtc).IsRequired();
         });
     }
 } 

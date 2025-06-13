@@ -135,7 +135,7 @@ builder.Services.AddHealthChecks()
     .AddDbContextCheck<LedgerDbContext>();
 
 builder.Services.AddScoped<IPaymentService, PaymentService>();
-builder.Services.AddScoped<MicroLedger.Domain.Services.IInterestService, MicroLedger.Infrastructure.Services.InterestService>();
+//builder.Services.AddScoped<MicroLedger.Domain.Services.IInterestService, MicroLedger.Infrastructure.Services.InterestService>();
 builder.Services.AddScoped<MicroLedger.Domain.Services.IBalanceService, MicroLedger.Application.Services.BalanceService>();
 builder.Services.AddHostedService<MicroLedger.Infrastructure.InterestService>();
 
@@ -161,7 +161,6 @@ builder.Services.AddMassTransit(x =>
 
 // Register outbox services
 builder.Services.AddScoped<IOutboxService, OutboxService>();
-builder.Services.AddHostedService<OutboxPublisherService>();
 
 builder.Services.AddGrpc();
 
@@ -170,8 +169,8 @@ var app = builder.Build();
 // Seed test data
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<LedgerDbContext>();
-    await TestDataSeeder.SeedTestData(db);
+    var dbContext = scope.ServiceProvider.GetRequiredService<LedgerDbContext>();
+    await MicroLedger.Infrastructure.TestDataSeeder.SeedTestDataAsync(dbContext);
 }
 
 // Configure the HTTP request pipeline
@@ -198,14 +197,19 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/healthz");
 
-app.MapGrpcService<MicroLedger.Infrastructure.Services.BalanceService>();
+// Map gRPC service
+app.MapGrpcService<MicroLedger.Infrastructure.Services.BalanceGrpcService>();
 
 app.Run();
 
-// JwtSettings class moved here for clarity
-public class JwtSettings
+// Make Program class public and partial
+public partial class Program
 {
-    public string Key { get; set; } = string.Empty;
-    public string Issuer { get; set; } = string.Empty;
-    public string Audience { get; set; } = string.Empty;
+    // JwtSettings class moved here for clarity
+    public class JwtSettings
+    {
+        public string Key { get; set; } = string.Empty;
+        public string Issuer { get; set; } = string.Empty;
+        public string Audience { get; set; } = string.Empty;
+    }
 }

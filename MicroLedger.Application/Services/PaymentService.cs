@@ -3,127 +3,114 @@ using Microsoft.Extensions.Logging;
 using MicroLedger.Application.Services.Interfaces;
 using MicroLedger.Domain.Interfaces;
 using MicroLedger.Domain;
-using MicroLedger.Domain.Services;
 using MicroLedger.Domain.Events;
-using MicroLedger.Infrastructure.Services;
 using System;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace MicroLedger.Application.Services;
 
 public class PaymentService : IPaymentService
 {
-    private readonly ILedgerDbContext _db;
-    private readonly ILogger<PaymentService> _logger;
+    private readonly ILedgerDbContext _dbContext;
     private readonly IOutboxService _outboxService;
-    private readonly IBalanceService _balanceService;
+    private readonly ILogger<PaymentService> _logger;
 
     public PaymentService(
-        ILedgerDbContext db,
-        ILogger<PaymentService> logger,
+        ILedgerDbContext dbContext,
         IOutboxService outboxService,
-        IBalanceService balanceService)
+        ILogger<PaymentService> logger)
     {
-        _db = db;
-        _logger = logger;
+        _dbContext = dbContext;
         _outboxService = outboxService;
-        _balanceService = balanceService;
+        _logger = logger;
     }
 
     public async Task<PaymentResponse> ProcessPaymentAsync(PaymentRequest request)
     {
-        // Validate request
         if (request.Amount <= 0)
-            throw new ArgumentException("Amount must be positive");
+        {
+            throw new ArgumentException("Amount must be greater than zero", nameof(request.Amount));
+        }
 
-        // Get accounts
-        var fromAccount = await _db.Accounts.FindAsync(request.FromAccountId);
-        var toAccount = await _db.Accounts.FindAsync(request.ToAccountId);
+        var fromAccount = await _dbContext.Accounts
+            .FirstOrDefaultAsync(a => a.Id == request.FromAccountId);
 
-        if (fromAccount == null || toAccount == null)
-            throw new ArgumentException("One or both accounts not found");
+        if (fromAccount == null)
+        {
+            throw new ArgumentException($"Account {request.FromAccountId} not found", nameof(request.FromAccountId));
+        }
 
-        if (fromAccount.Currency != toAccount.Currency)
-            throw new ArgumentException("Accounts must have same currency");
+        var toAccount = await _dbContext.Accounts
+            .FirstOrDefaultAsync(a => a.Id == request.ToAccountId);
 
-        // Check sufficient funds
-        var fromBalance = await _db.JournalLines
-            .Where(j => j.AccountId == fromAccount.Id)
-            .SumAsync(j => j.Credit - j.Debit);
+        if (toAccount == null)
+        {
+            throw new ArgumentException($"Account {request.ToAccountId} not found", nameof(request.ToAccountId));
+        }
 
-        if (fromBalance < request.Amount)
-            throw new ArgumentException("Insufficient funds");
+        if (fromAccount.Balance < request.Amount)
+        {
+            throw new InvalidOperationException("Insufficient funds");
+        }
 
         // Create transaction
         var transaction = new Transaction
         {
-            Id = Guid.NewGuid().ToString(),
-            TimestampUtc = DateTime.UtcNow,
             Reference = request.Reference
         };
 
-        _db.Transactions.Add(transaction);
+        await _dbContext.Transactions.AddAsync(transaction);
+        await _dbContext.SaveChangesAsync();
 
         // Create journal lines
         var debitLine = new JournalLine
         {
-            Id = Guid.NewGuid().ToString(),
             TransactionId = transaction.Id,
-            AccountId = fromAccount.Id,
+            AccountId = request.FromAccountId,
             Debit = request.Amount,
-            Credit = 0
+            Credit = 0.00m,
+            Transaction = transaction
         };
 
         var creditLine = new JournalLine
         {
-            Id = Guid.NewGuid().ToString(),
             TransactionId = transaction.Id,
-            AccountId = toAccount.Id,
-            Debit = 0,
-            Credit = request.Amount
+            AccountId = request.ToAccountId,
+            Debit = 0.00m,
+            Credit = request.Amount,
+            Transaction = transaction
         };
 
-        _db.JournalLines.Add(debitLine);
-        _db.JournalLines.Add(creditLine);
-        await _db.SaveChangesAsync();
+        await _dbContext.JournalLines.AddRangeAsync(debitLine, creditLine);
+
+        // Update account balances
+        fromAccount.Balance -= request.Amount;
+        toAccount.Balance += request.Amount;
+
+        await _dbContext.SaveChangesAsync();
 
         // Publish event
-        var @event = new TransactionPosted(
-            TransactionId: transaction.Id,
-            Reference: transaction.Reference,
-            TimestampUtc: transaction.TimestampUtc,
-            JournalLines: new List<JournalLineDto>
-            {
-                new(Id: debitLine.Id, AccountId: debitLine.AccountId, Debit: debitLine.Debit, Credit: debitLine.Credit),
-                new(Id: creditLine.Id, AccountId: creditLine.AccountId, Debit: creditLine.Debit, Credit: creditLine.Credit)
-            }
-        );
-
-        await _outboxService.AddEventAsync(@event, @event.EventType);
-
-        // Publish balance updates for both accounts
-        await _balanceService.PublishBalanceUpdateAsync(
-            fromAccount.Id,
+        var paymentEvent = new PaymentProcessed(
             transaction.Id,
-            "Payment"
+            request.FromAccountId,
+            request.ToAccountId,
+            request.Amount,
+            DateTime.UtcNow
         );
 
-        await _balanceService.PublishBalanceUpdateAsync(
-            toAccount.Id,
-            transaction.Id,
-            "Payment"
-        );
+        await _outboxService.SaveEventAsync(paymentEvent);
 
         return new PaymentResponse(
             TransactionId: transaction.Id,
             Status: "Completed",
-            Timestamp: transaction.TimestampUtc
+            Timestamp: DateTime.UtcNow
         );
     }
 
     public async Task<TransactionDto> GetTransactionAsync(string id)
     {
-        var transaction = await _db.Transactions
+        var transaction = await _dbContext.Transactions
             .Include(t => t.JournalLines)
             .FirstOrDefaultAsync(t => t.Id == id);
 
@@ -147,7 +134,7 @@ public class PaymentService : IPaymentService
 
     public async Task<AccountBalanceDto> GetAccountBalanceAsync(string accountId, DateTime? asOfDate = null)
     {
-        var query = _db.JournalLines
+        var query = _dbContext.JournalLines
             .Where(j => j.AccountId == accountId);
 
         if (asOfDate.HasValue)
@@ -157,7 +144,7 @@ public class PaymentService : IPaymentService
 
         var balance = await query.SumAsync(j => j.Credit - j.Debit);
 
-        var account = await _db.Accounts
+        var account = await _dbContext.Accounts
             .AsNoTracking()
             .FirstOrDefaultAsync(a => a.Id == accountId);
 

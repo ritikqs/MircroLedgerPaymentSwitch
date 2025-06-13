@@ -80,7 +80,8 @@ public class PaymentController : ControllerBase
             TransactionId = transaction.Id,
             AccountId = fromAccount.Id,
             Debit = request.Amount,
-            Credit = 0
+            Credit = 0,
+            Transaction = transaction
         });
         
         _db.JournalLines.Add(new JournalLine
@@ -89,7 +90,8 @@ public class PaymentController : ControllerBase
             TransactionId = transaction.Id,
             AccountId = toAccount.Id,
             Debit = 0,
-            Credit = request.Amount
+            Credit = request.Amount,
+            Transaction = transaction
         });
         
         await _db.SaveChangesAsync();
