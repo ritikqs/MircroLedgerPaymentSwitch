@@ -4,6 +4,8 @@ using Microsoft.EntityFrameworkCore;
 using MicroLedger.Domain.Interfaces;
 using MicroLedger.Domain;
 using MicroLedger.Application.Services.Interfaces;
+using MicroLedger.Domain.Services;
+using MicroLedger.Domain.Events;
 using Microsoft.Extensions.Logging;
 
 namespace MicroLedger.Application.Services;
@@ -12,15 +14,18 @@ public class PaymentService : IPaymentService
 {
     private readonly ILedgerDbContext _db;
     private readonly IOutboxService _outboxService;
+    private readonly IBalanceService _balanceService;
     private readonly ILogger<PaymentService> _logger;
 
     public PaymentService(
         ILedgerDbContext db,
         IOutboxService outboxService,
+        IBalanceService balanceService,
         ILogger<PaymentService> logger)
     {
         _db = db;
         _outboxService = outboxService;
+        _balanceService = balanceService;
         _logger = logger;
     }
 
@@ -61,7 +66,7 @@ public class PaymentService : IPaymentService
             await _db.SaveChangesAsync();
 
             // Create journal lines
-            var sourceLine = new JournalLine
+            var sourceJournalLine = new JournalLine
             {
                 TransactionId = transaction.Id,
                 AccountId = sourceAccount.Id,
@@ -70,7 +75,7 @@ public class PaymentService : IPaymentService
                 Transaction = transaction
             };
 
-            var destinationLine = new JournalLine
+            var destinationJournalLine = new JournalLine
             {
                 TransactionId = transaction.Id,
                 AccountId = destinationAccount.Id,
@@ -79,14 +84,29 @@ public class PaymentService : IPaymentService
                 Transaction = transaction
             };
 
-            await _db.JournalLines.AddRangeAsync(sourceLine, destinationLine);
+            await _db.JournalLines.AddRangeAsync(new[] { sourceJournalLine, destinationJournalLine });
             await _db.SaveChangesAsync();
 
-            _logger.LogInformation(
-                "Payment of {Amount} processed from {SourceAccount} to {DestinationAccount}",
-                request.Amount,
+            // Publish events
+            var paymentEvent = new PaymentProcessed(
+                transaction.Id,
                 sourceAccount.Id,
-                destinationAccount.Id
+                destinationAccount.Id,
+                request.Amount,
+                DateTime.UtcNow
+            );
+
+            await _outboxService.SaveEventAsync(paymentEvent);
+
+            // Publish balance updates
+            await _balanceService.PublishBalanceUpdateAsync(sourceAccount.Id, transaction.Id, "Payment sent");
+            await _balanceService.PublishBalanceUpdateAsync(destinationAccount.Id, transaction.Id, "Payment received");
+
+            _logger.LogInformation(
+                "Payment of {Amount} processed from {FromAccount} to {ToAccount}",
+                request.Amount,
+                request.FromAccountId,
+                request.ToAccountId
             );
 
             return new PaymentResponse(
@@ -97,7 +117,7 @@ public class PaymentService : IPaymentService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing payment");
+            _logger.LogError(ex, "Error processing payment from {FromAccount} to {ToAccount}", request.FromAccountId, request.ToAccountId);
             throw;
         }
     }
@@ -110,7 +130,7 @@ public class PaymentService : IPaymentService
 
         if (transaction == null)
         {
-            return null;
+            throw new ArgumentException($"Transaction {id} not found");
         }
 
         return new TransactionDto(

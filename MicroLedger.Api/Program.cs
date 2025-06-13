@@ -159,6 +159,8 @@ builder.Services.AddHostedService<InterestAccrualService>(sp =>
 // Add MassTransit configuration
 builder.Services.AddMassTransit(x =>
 {
+    x.AddConsumer<MicroLedger.Infrastructure.Services.BalanceUpdateConsumer>();
+
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host("rabbitmq", "/", h =>
